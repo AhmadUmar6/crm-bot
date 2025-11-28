@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+python-dotenv
+firebase-admin
+requests
+pydantic-settings
+python-jose[cryptography]

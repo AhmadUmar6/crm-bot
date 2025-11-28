@@ -1,0 +1,11 @@
+.env.local
+cookies.txt
+node_modules
+.DS_Store
+__pycache__
+*.pyc
+.env
+serviceAccountKey.json
+backend/serviceAccountKey.json
+backend/.env
+backend/.docker
