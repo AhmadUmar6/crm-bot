@@ -26,7 +26,7 @@ const ROOMS_OPTIONS = [
 ] as const;
 
 const formatOptionLabel = (option: OptionItem, prefix: string) =>
-  `${option.label} (#${option.value})` ?? `${prefix} #${option.value}`;
+    `${option.label} (#${option.value})`;
 
 export function LeadFiltersPanel({
   leads,
