@@ -3,8 +3,11 @@ import type {
   MessagesResponse,
 } from "@/types/leads";
 
+// Smart URL: browser uses relative path (via proxy), server uses absolute path (direct)
 const BASE_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+  typeof window === 'undefined'
+    ? process.env.NEXT_PUBLIC_BACKEND_URL ?? "https://crmrebs-backend-746815019501.europe-west1.run.app"
+    : process.env.NEXT_PUBLIC_BACKEND_URL ?? "";
 
 interface ApiError extends Error {
   status?: number;
