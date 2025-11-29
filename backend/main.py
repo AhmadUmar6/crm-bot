@@ -22,10 +22,12 @@ logger = logging.getLogger("crmrebs.api")
 GRAPH_API_BASE_URL = "https://graph.facebook.com/v20.0"
 
 app = FastAPI(title="CRMREBS Backend", version="0.1.0")
+# Split the string into a list right here
+allowed_origins_list = settings.cors_allowed_origins.split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_allowed_origins,
+    allow_origins=allowed_origins_list, # Pass the new list
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -363,8 +365,8 @@ async def login(payload: LoginRequest, response: Response) -> LoginResponse:
         key=TOKEN_COOKIE_NAME,
         value=token,
         httponly=True,
-        secure=False,  # Set to True behind HTTPS
-        samesite="lax",
+        secure=True,  # Set to True behind HTTPS
+        samesite="none",
         max_age=60 * 60 * 12,
     )
     return LoginResponse(success=True)

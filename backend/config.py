@@ -60,11 +60,9 @@ class Settings(BaseSettings):
 
     dashboard_password: Optional[SecretStr] = Field(default=None)
     cookie_secret_key: Optional[SecretStr] = Field(default=None)
-    cors_allowed_origins: List[str] = Field(
-        default_factory=lambda: [
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-        ]
+    cors_allowed_origins: str = Field(
+        default="http://localhost:3000,http://127.0.0.1:3000",
+        description="Comma-separated list of allowed origins"
     )
 
     model_config = SettingsConfigDict(
