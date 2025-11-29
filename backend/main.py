@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from auth import TOKEN_COOKIE_NAME, create_access_token, get_current_user
 from config import LeadStatus, db, settings
+from poll_crm import main as run_poller
 
 logger = logging.getLogger("crmrebs.api")
 
@@ -370,6 +371,20 @@ async def login(payload: LoginRequest, response: Response) -> LoginResponse:
         max_age=60 * 60 * 12,
     )
     return LoginResponse(success=True)
+
+
+@app.post("/api/poll")
+async def trigger_poller() -> ActionResponse:
+    """Trigger the CRM polling script. Used by Cloud Scheduler."""
+    try:
+        run_poller()
+        return ActionResponse(success=True, message="Polling completed.")
+    except Exception as exc:
+        logger.exception("Polling failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Polling failed: {str(exc)}",
+        ) from exc
 
 
 @app.get("/api/leads/new", response_model=LeadsResponse)

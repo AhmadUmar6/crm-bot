@@ -6,15 +6,9 @@ import useSWR from "swr";
 
 import { ConversationPanel } from "@/components/ConversationPanel";
 import { InlineNotice } from "@/components/InlineNotice";
-import { LeadFiltersPanel } from "@/components/LeadFilters";
 import { PageShell } from "@/components/PageShell";
 import { fetchHistoryLeads } from "@/lib/api";
 import { formatMessageTimestamp } from "@/lib/dates";
-import {
-  DEFAULT_LEAD_FILTERS,
-  LeadFilters,
-  applyLeadFilters,
-} from "@/lib/leads";
 import type { Lead } from "@/types/leads";
 
 const refreshIntervalMs = 30_000;
@@ -81,10 +75,7 @@ function matchesSearch(lead: Lead, query: string) {
 export default function ChatsPage() {
   const router = useRouter();
   const [activeLead, setActiveLead] = useState<Lead | null>(null);
-  const [appliedFilters, setAppliedFilters] =
-    useState<LeadFilters>(DEFAULT_LEAD_FILTERS);
   const [searchTerm, setSearchTerm] = useState("");
-  const [showFilters, setShowFilters] = useState(false);
 
   const { data, error, isLoading, mutate } = useSWR(
     "/api/leads/history",
@@ -101,15 +92,11 @@ export default function ChatsPage() {
     }
   }, [error, router]);
 
-  const filteredLeads = useMemo(() => {
-    const leads = data?.leads ?? [];
-    return applyLeadFilters(leads, appliedFilters);
-  }, [data?.leads, appliedFilters]);
-
   const searchedLeads = useMemo(() => {
-    if (!searchTerm) return filteredLeads;
-    return filteredLeads.filter((lead) => matchesSearch(lead, searchTerm));
-  }, [filteredLeads, searchTerm]);
+    const leads = data?.leads ?? [];
+    if (!searchTerm) return leads;
+    return leads.filter((lead) => matchesSearch(lead, searchTerm));
+  }, [data?.leads, searchTerm]);
 
   const sortedLeads = useMemo(() => {
     return [...searchedLeads].sort(
@@ -131,33 +118,15 @@ export default function ChatsPage() {
         subtitle="Stay on top of every conversation with sellers."
       >
         <div className="space-y-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="relative flex-1 sm:max-w-xs">
-              <input
-                type="search"
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-                placeholder="Search chats"
-                className="w-full rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-black placeholder:text-black/40 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowFilters((prev) => !prev)}
-              className="inline-flex items-center justify-center rounded-full border border-slate-200 px-5 py-2 text-sm font-medium text-black transition-colors hover:border-slate-300 hover:text-black/70"
-            >
-              {showFilters ? "Hide filters" : "Show filters"}
-            </button>
-          </div>
-
-          {showFilters ? (
-            <LeadFiltersPanel
-              leads={data?.leads ?? []}
-              appliedFilters={appliedFilters}
-              onApply={(filters) => setAppliedFilters(filters)}
-              onReset={() => setAppliedFilters(DEFAULT_LEAD_FILTERS)}
+          <div className="relative max-w-xs">
+            <input
+              type="search"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Search chats"
+              className="w-full rounded-full border border-black/20 bg-white px-4 py-2 text-sm text-black placeholder:text-black/40 focus:border-black/40 focus:outline-none focus:ring-2 focus:ring-black/10"
             />
-          ) : null}
+          </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-medium text-black">
             <span>Rezultate: {resultsCount}</span>

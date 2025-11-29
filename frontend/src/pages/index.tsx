@@ -33,6 +33,7 @@ export default function DashboardPage() {
   const [activeLead, setActiveLead] = useState<Lead | null>(null);
   const [appliedFilters, setAppliedFilters] =
     useState<LeadFilters>(DEFAULT_LEAD_FILTERS);
+  const [showFilters, setShowFilters] = useState(false);
 
   const { data, error, isLoading, mutate, isValidating } = useSWR(
     "/api/leads/new",
@@ -196,14 +197,14 @@ export default function DashboardPage() {
         type="button"
         onClick={handleBulkSend}
         disabled={selectedIds.size === 0 || pendingIds.size > 0}
-        className="rounded-full bg-slate-900 px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+        className="rounded-full bg-black px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-black/90 disabled:cursor-not-allowed disabled:opacity-60"
       >
         Send WhatsApp to Selected ({selectedIds.size})
       </button>
       <button
         type="button"
         onClick={clearSelection}
-        className="rounded-full border border-slate-200 px-5 py-2 text-sm font-medium text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-700"
+        className="rounded-full border border-black/20 px-5 py-2 text-sm font-medium text-black transition-colors hover:border-black/40 hover:bg-black/5"
       >
         Cancel selection
       </button>
@@ -213,7 +214,7 @@ export default function DashboardPage() {
       type="button"
       onClick={() => setMultiSelectMode(true)}
       disabled={!hasLeads}
-      className="rounded-full border border-slate-200 px-5 py-2 text-sm font-medium text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+      className="rounded-full border border-black/20 px-5 py-2 text-sm font-medium text-black transition-colors hover:border-black/40 hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-60"
     >
       Select multiple
     </button>
@@ -230,18 +231,30 @@ export default function DashboardPage() {
         subtitle="Review the newest properties and reach out instantly."
         actions={hasLeads ? actions : undefined}
       >
-        {data?.leads ? (
-          <LeadFiltersPanel
-            leads={data.leads}
-            appliedFilters={appliedFilters}
-            onApply={(filters) => setAppliedFilters(filters)}
-            onReset={() => setAppliedFilters(DEFAULT_LEAD_FILTERS)}
-          />
+        <div className="mb-4 flex items-center justify-between">
+          <div className="text-sm font-medium text-black">
+            Rezultate: {filteredLeads.length}
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowFilters((prev) => !prev)}
+            className="rounded-full border border-black/20 px-4 py-2 text-sm font-medium text-black transition-colors hover:border-black/40 hover:bg-black/5"
+          >
+            {showFilters ? "Hide filters" : "Show filters"}
+          </button>
+        </div>
+
+        {showFilters && data?.leads ? (
+          <div className="mb-6">
+            <LeadFiltersPanel
+              leads={data.leads}
+              appliedFilters={appliedFilters}
+              onApply={(filters) => setAppliedFilters(filters)}
+              onReset={() => setAppliedFilters(DEFAULT_LEAD_FILTERS)}
+            />
+          </div>
         ) : null}
 
-        <div className="mb-4 text-sm font-medium text-black">
-          Rezultate: {filteredLeads.length}
-        </div>
 
         {banner ? (
           <div className="mb-6">
@@ -351,7 +364,7 @@ export default function DashboardPage() {
                                   Status
                                 </dt>
                                 <dd>
-                                  <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-white">
+                                  <span className="rounded-full bg-black px-3 py-1 text-xs font-semibold uppercase tracking-wide text-white">
                                     {lead.status}
                                   </span>
                                 </dd>
@@ -384,7 +397,7 @@ export default function DashboardPage() {
                               disabled={
                                 isSending || pendingIds.size > 0 || !lead.lister_phone
                               }
-                              className="w-full rounded-full bg-slate-900 px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto md:w-full"
+                              className="w-full rounded-full bg-black px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-black/90 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto md:w-full"
                             >
                               {isSending ? "Sending…" : "Send WhatsApp"}
                             </button>
@@ -392,7 +405,7 @@ export default function DashboardPage() {
                           <button
                             type="button"
                             onClick={() => setActiveLead(lead)}
-                            className="w-full rounded-full border border-slate-200 px-5 py-2 text-sm font-medium text-black transition-colors hover:border-slate-300 hover:text-black/70 sm:w-auto md:w-full"
+                            className="w-full rounded-full border border-black/20 px-5 py-2 text-sm font-medium text-black transition-colors hover:border-black/40 hover:bg-black/5 sm:w-auto md:w-full"
                           >
                             Open conversation
                           </button>
