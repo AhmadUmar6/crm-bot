@@ -38,6 +38,15 @@ export interface MessagesResponse {
   messages: ConversationMessage[];
 }
 
+export interface Template {
+  name: string;
+  display_name: string;
+}
+
+export interface TemplatesResponse {
+  templates: Template[];
+}
+
 
 
 

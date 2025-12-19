@@ -7,7 +7,8 @@ import { InlineNotice } from "@/components/InlineNotice";
 import { LeadFiltersPanel } from "@/components/LeadFilters";
 import { ConversationPanel } from "@/components/ConversationPanel";
 import { PageShell } from "@/components/PageShell";
-import { fetchNewLeads, sendWhatsApp } from "@/lib/api";
+import { fetchNewLeads, fetchTemplates, sendWhatsApp } from "@/lib/api";
+import type { Template } from "@/types/leads";
 import { formatFullDateTime, formatMessageTimestamp } from "@/lib/dates";
 import {
   DEFAULT_LEAD_FILTERS,
@@ -34,6 +35,14 @@ export default function DashboardPage() {
   const [appliedFilters, setAppliedFilters] =
     useState<LeadFilters>(DEFAULT_LEAD_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
+  
+  // Template selector state
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<string>("");
+  const [templateModal, setTemplateModal] = useState<{
+    type: "single" | "bulk";
+    propertyId?: string;
+  } | null>(null);
 
   const { data, error, isLoading, mutate, isValidating } = useSWR(
     "/api/leads/new",
@@ -49,6 +58,25 @@ export default function DashboardPage() {
       void router.replace("/login");
     }
   }, [error, router]);
+
+  // Fetch available templates
+  useEffect(() => {
+    fetchTemplates()
+      .then((t) => {
+        setTemplates(t);
+        if (t.length > 0 && !selectedTemplate) {
+          setSelectedTemplate(t[0].name);
+        }
+      })
+      .catch(() => {
+        // Fallback if fetch fails
+        setTemplates([
+          { name: "new_leads", display_name: "Template 1" },
+          { name: "new_leads2", display_name: "Template 2" },
+        ]);
+        setSelectedTemplate("new_leads");
+      });
+  }, []);
 
   const filteredLeads = useMemo(() => {
     const leads = data?.leads ?? [];
@@ -109,19 +137,36 @@ export default function DashboardPage() {
     setMultiSelectMode(false);
   }, []);
 
-  const handleSingleSend = useCallback(
-    async (propertyId: string) => {
+  // Open template selector for single send
+  const openSingleSendModal = useCallback((propertyId: string) => {
+    setTemplateModal({ type: "single", propertyId });
+  }, []);
+
+  // Open template selector for bulk send
+  const openBulkSendModal = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    setTemplateModal({ type: "bulk" });
+  }, [selectedIds.size]);
+
+  // Confirm and send with selected template
+  const confirmSend = useCallback(async () => {
+    if (!templateModal) return;
+    
+    const templateToUse = selectedTemplate || templates[0]?.name;
+    setTemplateModal(null);
+
+    if (templateModal.type === "single" && templateModal.propertyId) {
+      const propertyId = templateModal.propertyId;
       setPendingIds((prev) => new Set(prev).add(propertyId));
       setBanner(null);
       try {
-        await sendWhatsApp(propertyId);
+        await sendWhatsApp(propertyId, templateToUse);
         setBanner({ tone: "success", message: "WhatsApp message sent." });
         await mutate();
       } catch (err) {
         setBanner({
           tone: "error",
-          message:
-            err instanceof Error ? err.message : "Failed to send WhatsApp.",
+          message: err instanceof Error ? err.message : "Failed to send WhatsApp.",
         });
       } finally {
         setPendingIds((prev) => {
@@ -130,57 +175,48 @@ export default function DashboardPage() {
           return next;
         });
       }
-    },
-    [mutate]
-  );
+    } else if (templateModal.type === "bulk") {
+      const ids = Array.from(selectedIds);
+      setPendingIds((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => next.add(id));
+        return next;
+      });
+      setBanner(null);
 
-  const handleBulkSend = useCallback(async () => {
-    if (selectedIds.size === 0) {
-      return;
-    }
+      let successCount = 0;
+      let failureCount = 0;
 
-    setBanner(null);
-    const ids = Array.from(selectedIds);
-    setPendingIds((prev) => {
-      const next = new Set(prev);
-      ids.forEach((id) => next.add(id));
-      return next;
-    });
+      for (const id of ids) {
+        try {
+          await sendWhatsApp(id, templateToUse);
+          successCount += 1;
+        } catch {
+          failureCount += 1;
+        }
+      }
 
-    let successCount = 0;
-    let failureCount = 0;
+      if (successCount > 0) {
+        await mutate();
+      }
 
-    for (const id of ids) {
-      try {
-        await sendWhatsApp(id);
-        successCount += 1;
-      } catch {
-        failureCount += 1;
+      setPendingIds(new Set());
+      setSelectedIds(new Set());
+      setMultiSelectMode(false);
+
+      if (failureCount === 0) {
+        setBanner({
+          tone: "success",
+          message: `Sent ${successCount} WhatsApp message${successCount === 1 ? "" : "s"}.`,
+        });
+      } else {
+        setBanner({
+          tone: "error",
+          message: `Sent ${successCount} messages, ${failureCount} failed.`,
+        });
       }
     }
-
-    if (successCount > 0) {
-      await mutate();
-    }
-
-    setPendingIds(new Set());
-    setSelectedIds(new Set());
-    setMultiSelectMode(false);
-
-    if (failureCount === 0) {
-      setBanner({
-        tone: "success",
-        message: `Sent ${successCount} WhatsApp message${
-          successCount === 1 ? "" : "s"
-        }.`,
-      });
-    } else {
-      setBanner({
-        tone: "error",
-        message: `Sent ${successCount} messages, ${failureCount} failed.`,
-      });
-    }
-  }, [selectedIds, mutate]);
+  }, [templateModal, selectedTemplate, templates, selectedIds, mutate]);
 
   const handleCopy = useCallback((lead: Lead) => {
     if (!lead.lister_phone) return;
@@ -195,7 +231,7 @@ export default function DashboardPage() {
     <>
       <button
         type="button"
-        onClick={handleBulkSend}
+        onClick={openBulkSendModal}
         disabled={selectedIds.size === 0 || pendingIds.size > 0}
         className="rounded-full bg-black px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-black/90 disabled:cursor-not-allowed disabled:opacity-60"
       >
@@ -393,7 +429,7 @@ export default function DashboardPage() {
                           {!multiSelectMode && (
                             <button
                               type="button"
-                              onClick={() => handleSingleSend(lead.property_id)}
+                              onClick={() => openSingleSendModal(lead.property_id)}
                               disabled={
                                 isSending || pendingIds.size > 0 || !lead.lister_phone
                               }
@@ -437,6 +473,63 @@ export default function DashboardPage() {
             }}
           />
         ) : null}
+
+        {/* Template Selector Modal */}
+        {templateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+              <h3 className="text-lg font-semibold text-black">
+                Select Template
+              </h3>
+              <p className="mt-1 text-sm text-black/60">
+                {templateModal.type === "single"
+                  ? "Choose which template to send"
+                  : `Send to ${selectedIds.size} lead${selectedIds.size === 1 ? "" : "s"}`}
+              </p>
+              
+              <div className="mt-4 space-y-2">
+                {templates.map((t) => (
+                  <label
+                    key={t.name}
+                    className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors ${
+                      selectedTemplate === t.name
+                        ? "border-black bg-black/5"
+                        : "border-slate-200 hover:border-slate-300"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="template"
+                      value={t.name}
+                      checked={selectedTemplate === t.name}
+                      onChange={() => setSelectedTemplate(t.name)}
+                      className="h-4 w-4 text-black focus:ring-black"
+                    />
+                    <span className="font-medium text-black">{t.display_name}</span>
+                  </label>
+                ))}
+              </div>
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setTemplateModal(null)}
+                  className="flex-1 rounded-full border border-black/20 px-4 py-2 text-sm font-medium text-black transition-colors hover:border-black/40 hover:bg-black/5"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmSend}
+                  disabled={!selectedTemplate || pendingIds.size > 0}
+                  className="flex-1 rounded-full bg-black px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-black/90 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Send
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </PageShell>
     </>
   );

@@ -85,6 +85,23 @@ class LeadsResponse(BaseModel):
 
 class SendWhatsAppRequest(BaseModel):
     property_id: str = Field(min_length=1)
+    template_name: Optional[str] = Field(default=None, description="Template to use, falls back to default if not provided")
+
+
+class TemplateOut(BaseModel):
+    name: str
+    display_name: str
+
+
+class TemplatesResponse(BaseModel):
+    templates: List[TemplateOut]
+
+
+# Hardcoded available templates
+AVAILABLE_TEMPLATES = [
+    {"name": "new_leads", "display_name": "Template 1"},
+    {"name": "new_leads2", "display_name": "Template 2"},
+]
 
 
 class ActionResponse(BaseModel):
@@ -426,7 +443,7 @@ async def login(payload: LoginRequest, response: Response) -> LoginResponse:
         key=TOKEN_COOKIE_NAME,
         value=token,
         httponly=True,
-        secure=True,  # Set to True behind HTTPS
+        secure=True,
         samesite="none",
         max_age=60 * 60 * 12,
     )
@@ -445,6 +462,16 @@ async def trigger_poller() -> ActionResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Polling failed: {str(exc)}",
         ) from exc
+
+
+@app.get("/api/templates", response_model=TemplatesResponse)
+async def get_templates(
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> TemplatesResponse:
+    """Return available WhatsApp message templates."""
+    return TemplatesResponse(
+        templates=[TemplateOut(**t) for t in AVAILABLE_TEMPLATES]
+    )
 
 
 @app.get("/api/leads/new", response_model=LeadsResponse)
@@ -506,12 +533,21 @@ async def send_whatsapp(
             content={"error": "WhatsApp Cloud API not configured."},
         )
 
+    # Use provided template or fall back to default from config
+    template_to_use = payload.template_name or whatsapp_config["template_name"]
+    
+    # Validate template exists in our list (optional safety check)
+    valid_template_names = [t["name"] for t in AVAILABLE_TEMPLATES]
+    if template_to_use not in valid_template_names:
+        logger.warning("Template '%s' not in allowed list, using default", template_to_use)
+        template_to_use = whatsapp_config["template_name"]
+
     payload_template: Dict[str, Any] = {
         "messaging_product": "whatsapp",
         "to": recipient,
         "type": "template",
         "template": {
-            "name": whatsapp_config["template_name"],
+            "name": template_to_use,
             "language": {"code": whatsapp_config["language"]},
         },
     }
@@ -581,7 +617,7 @@ async def send_whatsapp(
     parameter_count = int(whatsapp_config.get("parameter_count") or 0)
 
     if parameter_count == 0:
-        preview_text = f"Template sent: {whatsapp_config['template_name']}"
+        preview_text = f"Template sent: {template_to_use}"
     else:
         preview_text = (
             f"Hi {lead_data.get('lister_name', 'there')}, we saw your new listing "

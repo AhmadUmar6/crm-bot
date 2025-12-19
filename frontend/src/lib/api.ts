@@ -1,6 +1,8 @@
 import type {
   LeadsResponse,
   MessagesResponse,
+  Template,
+  TemplatesResponse,
 } from "@/types/leads";
 
 // Smart URL: browser uses relative path (via proxy), server uses absolute path (direct)
@@ -59,11 +61,19 @@ export async function fetchHistoryLeads(): Promise<LeadsResponse> {
   return request<LeadsResponse>("/api/leads/history");
 }
 
-export async function sendWhatsApp(propertyId: string): Promise<void> {
+export async function sendWhatsApp(propertyId: string, templateName?: string): Promise<void> {
   await request("/api/send-whatsapp", {
     method: "POST",
-    body: JSON.stringify({ property_id: propertyId }),
+    body: JSON.stringify({ 
+      property_id: propertyId,
+      ...(templateName && { template_name: templateName }),
+    }),
   });
+}
+
+export async function fetchTemplates(): Promise<Template[]> {
+  const res = await request<TemplatesResponse>("/api/templates");
+  return res.templates;
 }
 
 export async function login(password: string): Promise<void> {
