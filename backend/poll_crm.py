@@ -7,6 +7,7 @@ and persists them into Firestore using the shared backend configuration.
 from __future__ import annotations
 
 import logging
+import re  # <--- Added this import
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Dict, Optional
@@ -89,6 +90,34 @@ def _get_cutoff_datetime() -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
+# --- ADDED NORMALIZATION HELPERS ---
+def _normalize_phone(phone: Optional[str]) -> str:
+    """Strip all non-digit characters from phone number."""
+    if not phone:
+        return ""
+    return re.sub(r"\D", "", phone)
+
+
+def _normalize_phone_with_country_code(phone: Optional[str]) -> str:
+    """Normalize phone number and ensure country code prefix is present."""
+    normalized = _normalize_phone(phone)
+    if not normalized:
+        return ""
+    # Remove international prefix if present (e.g., "0040" -> "40")
+    if normalized.startswith("00"):
+        normalized = normalized[2:]
+    default_code = settings.default_country_dial_code or ""
+    if default_code and not normalized.startswith(default_code):
+        # Handle local format starting with 0 (e.g., "0712345678" -> "40712345678")
+        if normalized.startswith("0"):
+            normalized = default_code + normalized[1:]
+        # Handle short numbers without country code
+        elif len(normalized) <= 10:
+            normalized = default_code + normalized
+    return normalized
+# -----------------------------------
+
+
 def _extract_contact_metadata(contact: Dict[str, Any]) -> Dict[str, Optional[str]]:
     """Simplify the CRM contact payload into the fields required for leads."""
     first_name = (contact or {}).get("first_name") or ""
@@ -140,6 +169,11 @@ def _persist_lead(
 ) -> None:
     """Normalise and write the lead document into Firestore."""
     contact_meta = _extract_contact_metadata(contact_data)
+    
+    # --- UPDATED: Generate the normalized phone number here ---
+    raw_phone = contact_meta["lister_phone"]
+    normalized_phone = _normalize_phone_with_country_code(raw_phone)
+    # --------------------------------------------------------
 
     lead_record = LeadRecord(
         property_id=int(property_data["id"]),
@@ -147,14 +181,24 @@ def _persist_lead(
         title=property_data.get("title") or "Untitled property",
         date_added=date_added,
         lister_name=contact_meta["lister_name"],
-        lister_phone=contact_meta["lister_phone"],
+        lister_phone=raw_phone, # Keep raw for display
+        # No normalized field in LeadRecord schema? We can save it directly to the dict below if needed,
+        # OR better yet, if your LeadRecord schema doesn't support it, we save it separately.
+        # Assuming LeadRecord accepts extra fields or we patch it.
         status=LeadStatus.LEAD,
         outreach_history=[],
         crm_raw=property_data,
     )
 
+    # Convert to dict
+    lead_dict = lead_record.model_dump(mode="python")
+    
+    # ✅ CRITICAL: Add the normalized phone number to the database document
+    # This ensures new leads are saved with the format '407...' so main.py can find them instantly.
+    lead_dict["lister_phone_normalized"] = normalized_phone
+
     doc_ref = db.collection("leads").document(property_id)
-    doc_ref.set(lead_record.model_dump(mode="python"))
+    doc_ref.set(lead_dict)
     logger.info("Persisted new lead %s (%s) to Firestore.", property_id, lead_record.display_id)
 
 
@@ -241,4 +285,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

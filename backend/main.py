@@ -163,23 +163,35 @@ def _append_history(
 
 
 def _normalize_phone(phone: Optional[str]) -> str:
+    """Strip all non-digit characters from phone number."""
     if not phone:
         return ""
     return re.sub(r"\D", "", phone)
 
 
-def _format_whatsapp_recipient(phone: Optional[str]) -> Optional[str]:
+def _normalize_phone_with_country_code(phone: Optional[str]) -> str:
+    """Normalize phone number and ensure country code prefix is present."""
     normalized = _normalize_phone(phone)
     if not normalized:
-        return None
+        return ""
+    # Remove international prefix if present (e.g., "0040" -> "40")
     if normalized.startswith("00"):
         normalized = normalized[2:]
     default_code = settings.default_country_dial_code or ""
     if default_code and not normalized.startswith(default_code):
+        # Handle local format starting with 0 (e.g., "0712345678" -> "40712345678")
         if normalized.startswith("0"):
             normalized = default_code + normalized[1:]
+        # Handle short numbers without country code
         elif len(normalized) <= 10:
             normalized = default_code + normalized
+    return normalized
+
+
+def _format_whatsapp_recipient(phone: Optional[str]) -> Optional[str]:
+    normalized = _normalize_phone_with_country_code(phone)
+    if not normalized:
+        return None
     return normalized
 
 
@@ -274,17 +286,65 @@ def _update_message_status(
 
 
 def _find_lead_by_phone(phone: Optional[str]):
-    normalized = _normalize_phone(phone)
-    if not normalized:
+    """Find a lead by phone number with backward-compatible search."""
+    normalized_with_code = _normalize_phone_with_country_code(phone)
+    if not normalized_with_code:
         return None
+    
+    # First try: exact match with country code (for new leads stored correctly)
     query = (
         db.collection("leads")
-        .where("lister_phone_normalized", "==", normalized)
+        .where("lister_phone_normalized", "==", normalized_with_code)
         .limit(1)
         .stream()
     )
     for doc in query:
         return doc
+    
+    # Fallback: Try searching without country code (for old leads stored as local format)
+    normalized_raw = _normalize_phone(phone)
+    default_code = settings.default_country_dial_code or ""
+    
+    # Try removing country code prefix if present (e.g., "4078123456" -> "078123456")
+    normalized_without_code = normalized_raw
+    if default_code and normalized_raw.startswith(default_code):
+        normalized_without_code = "0" + normalized_raw[len(default_code):]
+    
+    if normalized_without_code and normalized_without_code != normalized_with_code:
+        query = (
+            db.collection("leads")
+            .where("lister_phone_normalized", "==", normalized_without_code)
+            .limit(1)
+            .stream()
+        )
+        for doc in query:
+            # Auto-fix: Update the stored normalized number to include country code
+            doc.reference.update({"lister_phone_normalized": normalized_with_code})
+            return doc
+    
+    # Last resort: Scan leads that might not have normalized field set correctly
+    # Check leads without normalized field or with different format (for backward compatibility)
+    all_leads = db.collection("leads").stream()
+    for doc in all_leads:
+        lead_data = doc.to_dict() or {}
+        stored_normalized = lead_data.get("lister_phone_normalized")
+        raw_phone = lead_data.get("lister_phone")
+        
+        if not raw_phone:
+            continue
+            
+        # If normalized field matches what we're looking for, we would have found it already
+        # So only check if it's different or missing
+        if stored_normalized == normalized_with_code:
+            continue  # Already checked in first query
+            
+        # Try normalizing the stored raw phone and compare
+        stored_normalized_with_code = _normalize_phone_with_country_code(raw_phone)
+        if stored_normalized_with_code == normalized_with_code:
+            # Found match by raw phone - update normalized field for future searches
+            doc.reference.update({"lister_phone_normalized": normalized_with_code})
+            return doc
+    
     return None
 
 
@@ -548,7 +608,7 @@ async def send_whatsapp(
         {
             "status": LeadStatus.REACHED_OUT.value,
             "outreach_history": history,
-            "lister_phone_normalized": _normalize_phone(lister_phone),
+            "lister_phone_normalized": _normalize_phone_with_country_code(lister_phone),
         }
     )
 
@@ -674,7 +734,7 @@ async def send_manual_reply(
     doc_ref.update(
         {
             "status": LeadStatus.REACHED_OUT.value,
-            "lister_phone_normalized": _normalize_phone(lead_data.get("lister_phone")),
+            "lister_phone_normalized": _normalize_phone_with_country_code(lead_data.get("lister_phone")),
         }
     )
 
@@ -771,7 +831,7 @@ async def whatsapp_webhook_update(payload: Dict[str, Any]):
                     raw=message,
                 )
 
-                normalized_sender = _normalize_phone(sender_id)
+                normalized_sender = _normalize_phone_with_country_code(sender_id)
                 if normalized_sender:
                     db.collection("leads").document(property_id).update(
                         {"lister_phone_normalized": normalized_sender}
@@ -784,4 +844,3 @@ async def whatsapp_webhook_update(payload: Dict[str, Any]):
                 _update_message_status(status_id, status_value, status_ts)
 
     return {"success": True}
-
