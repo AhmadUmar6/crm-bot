@@ -302,67 +302,124 @@ def _update_message_status(
         )
 
 
-def _find_lead_by_phone(phone: Optional[str]):
-    """Find a lead by phone number with backward-compatible search."""
+def _find_all_leads_by_phone(phone: Optional[str]) -> List:
+    """Find ALL leads with this phone number."""
     normalized_with_code = _normalize_phone_with_country_code(phone)
     if not normalized_with_code:
-        return None
+        return []
     
-    # First try: exact match with country code (for new leads stored correctly)
+    # Get all leads with this normalized phone
     query = (
         db.collection("leads")
         .where("lister_phone_normalized", "==", normalized_with_code)
-        .limit(1)
         .stream()
     )
-    for doc in query:
-        return doc
+    leads = list(query)
     
-    # Fallback: Try searching without country code (for old leads stored as local format)
+    # Also check old format (backward compatibility)
     normalized_raw = _normalize_phone(phone)
     default_code = settings.default_country_dial_code or ""
     
-    # Try removing country code prefix if present (e.g., "4078123456" -> "078123456")
-    normalized_without_code = normalized_raw
     if default_code and normalized_raw.startswith(default_code):
         normalized_without_code = "0" + normalized_raw[len(default_code):]
+        if normalized_without_code != normalized_with_code:
+            query = (
+                db.collection("leads")
+                .where("lister_phone_normalized", "==", normalized_without_code)
+                .stream()
+            )
+            for doc in query:
+                # Auto-fix and add to list
+                doc.reference.update({"lister_phone_normalized": normalized_with_code})
+                leads.append(doc)
     
-    if normalized_without_code and normalized_without_code != normalized_with_code:
-        query = (
-            db.collection("leads")
-            .where("lister_phone_normalized", "==", normalized_without_code)
-            .limit(1)
-            .stream()
-        )
-        for doc in query:
-            # Auto-fix: Update the stored normalized number to include country code
-            doc.reference.update({"lister_phone_normalized": normalized_with_code})
-            return doc
+    return leads
+
+
+def _find_lead_by_phone(phone: Optional[str]):
+    """Find the best lead by phone number - prioritizes most recently messaged."""
+    leads = _find_all_leads_by_phone(phone)
     
-    # Last resort: Scan leads that might not have normalized field set correctly
-    # Check leads without normalized field or with different format (for backward compatibility)
-    all_leads = db.collection("leads").stream()
-    for doc in all_leads:
-        lead_data = doc.to_dict() or {}
-        stored_normalized = lead_data.get("lister_phone_normalized")
-        raw_phone = lead_data.get("lister_phone")
+    if not leads:
+        # Last resort fallback for leads without normalized phone
+        normalized_with_code = _normalize_phone_with_country_code(phone)
+        if not normalized_with_code:
+            return None
+        all_leads = db.collection("leads").stream()
+        for doc in all_leads:
+            lead_data = doc.to_dict() or {}
+            raw_phone = lead_data.get("lister_phone")
+            if not raw_phone:
+                continue
+            stored_normalized_with_code = _normalize_phone_with_country_code(raw_phone)
+            if stored_normalized_with_code == normalized_with_code:
+                doc.reference.update({"lister_phone_normalized": normalized_with_code})
+                return doc
+        return None
+    
+    if len(leads) == 1:
+        return leads[0]
+    
+    # Multiple leads - find the one most recently sent an outbound message
+    best_lead = None
+    best_time = None
+    
+    for lead in leads:
+        data = lead.to_dict() or {}
+        outbound_at = data.get("last_outbound_at")
+        if outbound_at:
+            if best_time is None or outbound_at > best_time:
+                best_time = outbound_at
+                best_lead = lead
+    
+    # If we found one with last_outbound_at, use it
+    if best_lead:
+        return best_lead
+    
+    # Otherwise return first (backward compatibility - no outbound_at field)
+    return leads[0]
+
+
+def _can_send_template(phone: str) -> tuple[bool, str]:
+    """Check if we can send a template to this phone number.
+    
+    Returns (can_send, reason_message)
+    - If already contacted and no reply received: (False, error message)
+    - Otherwise: (True, "OK")
+    """
+    normalized = _normalize_phone_with_country_code(phone)
+    if not normalized:
+        return True, "OK"
+    
+    leads = _find_all_leads_by_phone(phone)
+    if not leads:
+        return True, "OK"  # No existing leads with this phone
+    
+    has_been_contacted = False
+    
+    for lead in leads:
+        data = lead.to_dict() or {}
+        lead_status = data.get("status")
         
-        if not raw_phone:
-            continue
+        # Check if this lead has been contacted (REACHED_OUT or ERROR status)
+        if lead_status in [LeadStatus.REACHED_OUT.value, LeadStatus.ERROR.value]:
+            has_been_contacted = True
             
-        # If normalized field matches what we're looking for, we would have found it already
-        # So only check if it's different or missing
-        if stored_normalized == normalized_with_code:
-            continue  # Already checked in first query
-            
-        # Try normalizing the stored raw phone and compare
-        stored_normalized_with_code = _normalize_phone_with_country_code(raw_phone)
-        if stored_normalized_with_code == normalized_with_code:
-            # Found match by raw phone - update normalized field for future searches
-            doc.reference.update({"lister_phone_normalized": normalized_with_code})
-            return doc
+            # Check if this lead has any inbound messages (they replied)
+            inbound_query = (
+                lead.reference.collection("messages")
+                .where("direction", "==", "inbound")
+                .limit(1)
+                .stream()
+            )
+            if any(inbound_query):
+                # They've replied before! Can contact again.
+                return True, "OK"
     
-    return None
+    if has_been_contacted:
+        return False, "Already contacted this number - no reply received yet. Cannot send another template until they respond."
+    
+    return True, "OK"
 
 
 def _ensure_whatsapp_configured() -> Dict[str, Optional[str]]:
@@ -522,6 +579,14 @@ async def send_whatsapp(
             content={"error": "Lead phone number is invalid."},
         )
 
+    # Check if we can send to this phone number (not already contacted without reply)
+    can_send, reason = _can_send_template(lister_phone)
+    if not can_send:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": reason},
+        )
+
     try:
         whatsapp_config = _ensure_whatsapp_configured()
     except RuntimeError as exc:
@@ -645,6 +710,7 @@ async def send_whatsapp(
             "status": LeadStatus.REACHED_OUT.value,
             "outreach_history": history,
             "lister_phone_normalized": _normalize_phone_with_country_code(lister_phone),
+            "last_outbound_at": datetime.now(timezone.utc),  # Track when we last messaged
         }
     )
 
@@ -660,25 +726,41 @@ async def get_lead_messages(
     if not doc_snapshot.exists:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found.")
 
-    message_docs = (
-        doc_ref.collection("messages")
-        .order_by("timestamp", direction=firestore.Query.ASCENDING)
-        .stream()
-    )
-
+    lead_data = doc_snapshot.to_dict() or {}
+    phone = lead_data.get("lister_phone")
+    
+    # Get all leads with the same phone number for unified conversation view
+    all_leads = _find_all_leads_by_phone(phone) if phone else []
+    
+    # If no other leads found, fall back to just this lead
+    if not all_leads:
+        all_leads = [doc_snapshot]
+    
+    # Fetch messages from ALL leads with this phone
     messages: List[MessagePayload] = []
-    for msg_doc in message_docs:
-        msg_data = msg_doc.to_dict() or {}
-        messages.append(
-            MessagePayload(
-                id=msg_doc.id,
-                direction=msg_data.get("direction", "outbound"),
-                message=msg_data.get("message", ""),
-                message_type=msg_data.get("message_type", "text"),
-                timestamp=msg_data.get("timestamp", datetime.now(timezone.utc)),
-                status=msg_data.get("status"),
-            )
+    for lead in all_leads:
+        lead_ref = lead.reference if hasattr(lead, 'reference') else db.collection("leads").document(lead.id)
+        message_docs = (
+            lead_ref.collection("messages")
+            .order_by("timestamp", direction=firestore.Query.ASCENDING)
+            .stream()
         )
+        
+        for msg_doc in message_docs:
+            msg_data = msg_doc.to_dict() or {}
+            messages.append(
+                MessagePayload(
+                    id=msg_doc.id,
+                    direction=msg_data.get("direction", "outbound"),
+                    message=msg_data.get("message", ""),
+                    message_type=msg_data.get("message_type", "text"),
+                    timestamp=msg_data.get("timestamp", datetime.now(timezone.utc)),
+                    status=msg_data.get("status"),
+                )
+            )
+    
+    # Sort all messages by timestamp for unified chronological view
+    messages.sort(key=lambda m: m.timestamp)
 
     return MessagesResponse(messages=messages)
 
@@ -771,6 +853,7 @@ async def send_manual_reply(
         {
             "status": LeadStatus.REACHED_OUT.value,
             "lister_phone_normalized": _normalize_phone_with_country_code(lead_data.get("lister_phone")),
+            "last_outbound_at": datetime.now(timezone.utc),  # Track when we last messaged
         }
     )
 
